@@ -206,11 +206,12 @@ async function readQuestionAloud() {
 	};
 
 	try {
-		// Use application/x-www-form-urlencoded to avoid CORS preflight from browsers.
-		const formBody = new URLSearchParams({ data: JSON.stringify(payload) });
 		const response = await fetch(GOOGLE_SCRIPT_URL, {
 			method: 'POST',
-			body: formBody.toString()
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(payload)
 		});
 
 		if (!response.ok) {
@@ -774,11 +775,12 @@ async function submitAttempt() {
 
 	try {
 		showMessage("Submitting to Google Sheet...", "info");
-		// Submit as form-encoded to avoid browser preflight
-		const formBody = new URLSearchParams({ data: JSON.stringify(payload) });
 		const response = await fetch(GOOGLE_SCRIPT_URL, {
 			method: 'POST',
-			body: formBody.toString()
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(payload)
 		});
 
 		if (!response.ok) {
