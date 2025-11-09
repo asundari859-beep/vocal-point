@@ -1,29 +1,55 @@
-// --- APP STATE & CONFIG ---
-let currentPage = 'intro';
-let currentGoal = '';
-let currentAnalysis = null;
-let isTeacherView = false;
-let allRecords = [];
-let isRecording = false;
-let speechRecognition;
-
-// Loading state management
-function showLoading() {
-    document.getElementById('loadingIndicator').classList.remove('hidden');
-    document.getElementById('messageBox').classList.add('hidden');
-}
-
-function hideLoading() {
-    document.getElementById('loadingIndicator').classList.add('hidden');
-}
-
 // --- API CONFIG ---
 const GEMINI_API_KEY = 'AIzaSyBe1ovArVarbNKzsMt0fw2H0Vmh5RHChqk'; // Replace with your actual API key
 const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
 const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-// The API_KEY is gone! This is now secure.
-// Removed Google Apps Script URL - using direct Gemini API calls now
+
+// Initialize all functions in global scope
+function showLoading() {
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const messageBox = document.getElementById('messageBox');
+    if (loadingIndicator && messageBox) {
+        loadingIndicator.classList.remove('hidden');
+        messageBox.classList.add('hidden');
+    }
+}
+
+function hideLoading() {
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    if (loadingIndicator) {
+        loadingIndicator.classList.add('hidden');
+    }
+}
+
+// Wait for DOM to be ready before initializing app
+document.addEventListener('DOMContentLoaded', () => {
+    // Load initial data
+    loadRecordsFromStorage();
+    
+    // Setup Speech Recognition
+    setupSpeechRecognition();
+
+    // Find the intro button and call showPage with it
+    const introButton = document.querySelector('.nav-btn[onclick*="\'intro\'"]');
+    showPage('intro', introButton);
+    // --- APP STATE & CONFIG ---
+    let currentPage = 'intro';
+    let currentGoal = '';
+    let currentAnalysis = null;
+    let isTeacherView = false;
+    let allRecords = [];
+    let isRecording = false;
+    let speechRecognition;
+
+    // Loading state management
+    window.showLoading = function() {
+        document.getElementById('loadingIndicator').classList.remove('hidden');
+        document.getElementById('messageBox').classList.add('hidden');
+    }
+
+    window.hideLoading = function() {
+        document.getElementById('loadingIndicator').classList.add('hidden');
+    }
 
 // Rate limiting: 5 requests per minute (one every 12 seconds)
 // This is now client-side throttling to avoid spamming your own script
@@ -908,15 +934,4 @@ const UNITS = {
 	'unit10': { title: 'Unit 10: World Around Us', sentences: ['The elephant is bigger than the lion.', 'This is the most expensive car in the world.', 'A cheetah can run very fast.', 'The Pacific Ocean is the largest ocean.', 'What is the capital of Japan?'] }
 };
     
-// Run on page load
-document.addEventListener('DOMContentLoaded', () => {
-	// Load initial data
-	loadRecordsFromStorage();
-    
-	// NEW: Setup Speech Recognition
-	setupSpeechRecognition();
-
-	// Find the intro button and call showPage with it
-	const introButton = document.querySelector('.nav-btn[onclick*="\'intro\'"]');
-	showPage('intro', introButton);
 });
