@@ -7,7 +7,11 @@ let allRecords = [];
 let isRecording = false;
 let speechRecognition;
 
-// --- GOOGLE SCRIPT CONFIG ---
+// --- API CONFIG ---
+const GEMINI_API_KEY = 'AIzaSyBe1ovArVarbNKzsMt0fw2H0Vmh5RHChqk'; // Replace with your actual API key
+const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
+const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 // The API_KEY is gone! This is now secure.
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyNF_yyyannNqnNnX2CyNXT6k8sq0fj1Uyo663vZhk-pTqGwZQtPJeaF4bFYWgF2EqSyA/exec"; // <-- This is your Web App URL
 
@@ -258,12 +262,79 @@ async function readQuestionAloud() {
 
 // --- AI ANALYSIS (GEMINI) ---
     
-// Main analysis function (Now calls our Google Script)
+// Main analysis function (Direct Gemini API call)
 async function analyzeSpeechWithGemini(goal, transcription) {
-	if (!transcription) {
-		showMessage("Please provide a transcription of your speech first.", "warning");
-		return;
-	}
+    if (!transcription) {
+        showMessage("Please provide a transcription of your speech first.", "warning");
+        return;
+    }
+    
+    try {
+        const systemPrompt = `
+            You are an expert English Language (ESL) pronunciation coach.
+            Compare the student's transcription to the goal sentence.
+            Analyze it for accuracy, omitted words, and mispronounced words.
+            Return a JSON object with:
+            - score (0-100): Pronunciation accuracy score
+            - feedback: Constructive feedback paragraph
+            - analysis: Array of word objects from goal sentence with:
+              - word: The word from goal sentence
+              - status: "correct", "mispronounced", or "omitted"
+              - note: Brief note for mistakes (optional)
+        `;
+
+        const response = await fetch(`${API_BASE_URL}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                contents: [{
+                    role: 'user',
+                    parts: [{
+                        text: `Goal: "${goal}"\nTranscription: "${transcription}"`
+                    }]
+                }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: {
+                    temperature: 0.1,
+                    topP: 0.8,
+                    topK: 40
+                }
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const analysis = JSON.parse(data.candidates[0].content.parts[0].text);
+        
+        // Update UI
+        displayAnalysis(analysis);
+        
+        // Log attempt
+        logAttempt({
+            timestamp: new Date().toISOString(),
+            student_name: document.getElementById('studentName')?.value || 'Anonymous',
+            student_class: document.getElementById('studentClass')?.value || 'Unspecified',
+            sentence: goal,
+            transcription: transcription,
+            score: analysis.score,
+            feedback: analysis.feedback,
+            word_analysis: analysis.analysis
+        });
+        
+        // Update analytics
+        updateAnalytics();
+        
+        return analysis;
+    } catch (error) {
+        console.error('Error calling Gemini API:', error);
+        showMessage('Sorry, there was an error analyzing your speech. Please try again.', 'error');
+        throw error;
+    }
 
 	if (!GOOGLE_SCRIPT_URL) {
 		showMessage("App is not configured. Missing Google Script URL.", "error");
