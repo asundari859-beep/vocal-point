@@ -9,7 +9,7 @@ let speechRecognition;
 
 // --- GOOGLE SCRIPT CONFIG ---
 // The API_KEY is gone! This is now secure.
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyB7cirV-MeOS2WJ6M7d6qHuYPI7GK3PeL4jqyHi-VLmelmGmLk5tnp6RN6lX8-Np7vVg/exec"; // <-- This is your Web App URL
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzjlxisLIq7Bf-Z4phiuRrjnS5KX04OHGwwetrO4k55K5dgO-o_RplQApkeiRyBdsqRkA/exec"; // <-- This is your Web App URL
 
 // Rate limiting: 5 requests per minute (one every 12 seconds)
 // This is now client-side throttling to avoid spamming your own script
