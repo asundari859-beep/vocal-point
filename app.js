@@ -1,937 +1,1252 @@
-// --- API CONFIG ---
-const GEMINI_API_KEY = 'AIzaSyBe1ovArVarbNKzsMt0fw2H0Vmh5RHChqk'; // Replace with your actual API key
-const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
-const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
-const API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-
-// Initialize all functions in global scope
-function showLoading() {
-    const loadingIndicator = document.getElementById('loadingIndicator');
-    const messageBox = document.getElementById('messageBox');
-    if (loadingIndicator && messageBox) {
-        loadingIndicator.classList.remove('hidden');
-        messageBox.classList.add('hidden');
-    }
-}
-
-function hideLoading() {
-    const loadingIndicator = document.getElementById('loadingIndicator');
-    if (loadingIndicator) {
-        loadingIndicator.classList.add('hidden');
-    }
-}
-
-// Wait for DOM to be ready before initializing app
-document.addEventListener('DOMContentLoaded', () => {
-    // Load initial data
-    loadRecordsFromStorage();
-    
-    // Setup Speech Recognition
-    setupSpeechRecognition();
-
-    // Find the intro button and call showPage with it
-    const introButton = document.querySelector('.nav-btn[onclick*="\'intro\'"]');
-    showPage('intro', introButton);
-    // --- APP STATE & CONFIG ---
-    let currentPage = 'intro';
-    let currentGoal = '';
-    let currentAnalysis = null;
-    let isTeacherView = false;
-    let allRecords = [];
-    let isRecording = false;
-    let speechRecognition;
-
-    // Loading state management
-    window.showLoading = function() {
-        document.getElementById('loadingIndicator').classList.remove('hidden');
-        document.getElementById('messageBox').classList.add('hidden');
-    }
-
-    window.hideLoading = function() {
-        document.getElementById('loadingIndicator').classList.add('hidden');
-    }
-
-// Rate limiting: 5 requests per minute (one every 12 seconds)
-// This is now client-side throttling to avoid spamming your own script
-const RATE_LIMIT_MS = 12000;
-let lastApiCallTime = 0;
-
-
-// --- SPEECH RECOGNITION (WEB SPEECH API) ---
-
-function setupSpeechRecognition() {
-	// Check for browser support
-	const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-	if (!SpeechRecognition) {
-		showMessage("Speech recognition not supported in this browser. Please type your transcription.", "warning");
-		return;
-	}
-
-	speechRecognition = new SpeechRecognition();
-	speechRecognition.continuous = false; // Stop after first pause
-	speechRecognition.interimResults = false; // Get final results
-	speechRecognition.lang = 'en-US';
-
-	speechRecognition.onresult = (event) => {
-		const transcript = event.results[event.results.length - 1][0].transcript;
+   // --- GEMINI CONFIGURATION & UTILITIES ---
+        const API_KEY = "AIzaSyBe1ovArVarbNKzsMt0fw2H0Vmh5RHChqk";
+        const TEXT_MODEL = "gemini-2.5-flash-preview-09-2025";
+        const MAX_RETRIES = 3;
         
-		// Find the correct input box for the current page
-		const inputId = (currentPage === 'custom') ? 'customTranscription' : 'transcription';
-		const transcriptionInput = document.getElementById(inputId);
-        
-		if (transcriptionInput) {
-			transcriptionInput.value = transcript;
-		}
-        
-		// Turn off the recording UI
-		const micBtnId = (currentPage === 'custom') ? 'customMicBtn' : 'micBtn';
-		const micBtn = document.getElementById(micBtnId);
-		if (micBtn) {
-			micBtn.classList.remove('mic-pulse', 'bg-red-500', 'hover:bg-red-600');
-			micBtn.classList.add('bg-blue-500', 'hover:bg-blue-600');
-			micBtn.innerHTML = `<svg class="w-6 h-6" fill="currentColor" viewbox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1.2-9.1c0-.66.54-1.2 1.2-1.2s1.2.54 1.2 1.2v6.1c0 .66-.54 1.2-1.2 1.2s-1.2-.54-1.2-1.2V4.9zm6.7 6.1c0 3-2.54 5.1-5.5 5.1s-5.5-2.1-5.5-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-2.18c3.28-.49 6-3.31 6-6.72h-1.5z" /></svg>`;
-		}
-		isRecording = false;
-	};
-
-	speechRecognition.onerror = (event) => {
-		if (event.error === 'no-speech') {
-			showMessage("No speech detected. Please try again.", "warning");
-		} else if (event.error === 'audio-capture') {
-			showMessage("Microphone error. Please check your mic.", "error");
-		} else if (event.error === 'not-allowed') {
-			showMessage("Microphone permission denied. Please allow mic access in your browser settings.", "error");
-		} else {
-			showMessage(`Speech recognition error: ${event.error}`, "error");
-		}
-        
-		// Reset button
-		const micBtnId = (currentPage === 'custom') ? 'customMicBtn' : 'micBtn';
-		const micBtn = document.getElementById(micBtnId);
-		if (micBtn) {
-			 micBtn.classList.remove('mic-pulse', 'bg-red-500', 'hover:bg-red-600');
-			 micBtn.classList.add('bg-blue-500', 'hover:bg-blue-600');
-			 micBtn.innerHTML = `<svg class="w-6 h-6" fill="currentColor" viewbox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1.2-9.1c0-.66.54-1.2 1.2-1.2s1.2.54 1.2 1.2v6.1c0 .66-.54 1.2-1.2 1.2s-1.2-.54-1.2-1.2V4.9zm6.7 6.1c0 3-2.54 5.1-5.5 5.1s-5.5-2.1-5.5-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-2.18c3.28-.49 6-3.31 6-6.72h-1.5z" /></svg>`;
-		}
-		isRecording = false;
-	};
-
-	speechRecognition.onstart = () => {
-		 const micBtnId = (currentPage === 'custom') ? 'customMicBtn' : 'micBtn';
-		 const micBtn = document.getElementById(micBtnId);
-		 micBtn.classList.add('mic-pulse', 'bg-red-500', 'hover:bg-red-600');
-		 micBtn.classList.remove('bg-blue-500', 'hover:bg-blue-600');
-		 micBtn.innerHTML = `<svg class="w-6 h-6" fill="currentColor" viewbox="0 0 24 24"><path d="M19 11h-1.7c0 3-2.54 5.1-5.5 5.1S6.3 14 6.3 11H4.6c0 3.41 2.72 6.23 6 6.72V21h2v-2.18c3.28-.49 6-3.31 6-6.72zM12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" /></svg>`;
-	};
-}
-
-function toggleRecording(buttonId) {
-	if (!speechRecognition) {
-		showMessage("Speech recognition is not set up.", "error");
-		return;
-	}
-
-	if (isRecording) {
-		speechRecognition.stop();
-		isRecording = false;
-	} else {
-		try {
-			speechRecognition.start();
-			isRecording = true;
-			showMessage("Listening...", "info", 2000);
-		} catch(e) {
-			if (e.name === 'InvalidStateError') {
-				 // This can happen if start() is called too quickly after stop()
-				 console.warn("Speech recognition is not ready, please wait a moment.");
-			} else {
-				 console.error("Could not start speech recognition: ", e);
-				 showMessage("Could not start microphone.", "error");
-			}
-		}
-	}
-}
-
-// A separate toggle for the custom page, so they don't interfere
-function toggleCustomRecording(buttonId) {
-	toggleRecording(buttonId);
-}
-
-// --- TTS (TEXT-TO-SPEECH) ---
-    
-// Helper: Convert Base64 string to ArrayBuffer
-function base64ToArrayBuffer(base64) {
-	const binaryString = window.atob(base64);
-	const len = binaryString.length;
-	const bytes = new Uint8Array(len);
-	for (let i = 0; i < len; i++) {
-		bytes[i] = binaryString.charCodeAt(i);
-	}
-	return bytes.buffer;
-}
-
-// Helper: Convert PCM data to WAV blob
-function pcmToWav(pcmData, sampleRate) {
-	const numSamples = pcmData.length;
-	const numChannels = 1;
-	const bitsPerSample = 16;
-	const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-	const blockAlign = numChannels * (bitsPerSample / 8);
-	const dataSize = numSamples * numChannels * (bitsPerSample / 8);
-	const buffer = new ArrayBuffer(44 + dataSize);
-	const view = new DataView(buffer);
-
-	// RIFF header
-	view.setUint32(0, 0x52494646, false); // "RIFF"
-	view.setUint32(4, 36 + dataSize, true);
-	view.setUint32(8, 0x57415645, false); // "WAVE"
-	// "fmt " sub-chunk
-	view.setUint32(12, 0x666D7420, false); // "fmt "
-	view.setUint32(16, 16, true); // Sub-chunk size
-	view.setUint16(20, 1, true); // Audio format (1 = PCM)
-	view.setUint16(22, numChannels, true);
-	view.setUint32(24, sampleRate, true);
-	view.setUint32(28, byteRate, true);
-	view.setUint16(32, blockAlign, true);
-	view.setUint16(34, bitsPerSample, true);
-	// "data" sub-chunk
-	view.setUint32(36, 0x64617461, false); // "data"
-	view.setUint32(40, dataSize, true);
-
-	// Write PCM data
-	let offset = 44;
-	for (let i = 0; i < numSamples; i++, offset += 2) {
-		view.setInt16(offset, pcmData[i], true);
-	}
-
-	return new Blob([view], { type: 'audio/wav' });
-}
-
-// Helper: Play the audio blob
-function playAudio(blob) {
-	const audioUrl = URL.createObjectURL(blob);
-	const audio = new Audio(audioUrl);
-	audio.play();
-	audio.onended = () => {
-		URL.revokeObjectURL(audioUrl);
-	};
-}
-    
-// Main TTS Function (Direct Gemini API call)
-async function readQuestionAloud() {
-    if (!currentGoal) {
-        showMessage("Please select or type a sentence first.", "warning");
-        return;
-    }
-    
-    showMessage("Generating audio...", "info");
-    showLoading();
-    
-    try {
-        const response = await fetch(`${API_BASE_URL}/${TTS_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{ text: `Say in a clear, friendly, American-English voice: ${currentGoal}` }]
-                }],
-                generationConfig: {
-                    responseModalities: ["AUDIO"],
-                    speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } }
-                    }
+        /**
+         * Performs a fetch request with exponential backoff.
+         */
+        async function apiCallWithBackoff(url, options, retries = 0) {
+            try {
+                const response = await fetch(url, options);
+                if (response.status === 429 && retries < MAX_RETRIES) {
+                    const delay = Math.pow(2, retries) * 1000;
+                    console.warn(`API rate limit hit. Retrying in ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return apiCallWithBackoff(url, options, retries + 1);
                 }
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) {
+                    const errorBody = await response.text();
+                    throw new Error(`API call failed: ${response.status} ${response.statusText} - ${errorBody.substring(0, 100)}...`);
+                }
+                return response;
+            } catch (error) {
+                if (retries < MAX_RETRIES) {
+                    const delay = Math.pow(2, retries) * 1000;
+                    console.warn(`API call error. Retrying in ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return apiCallWithBackoff(url, options, retries + 1);
+                }
+                console.error(`Max retries reached. Failed to connect to API: ${error.message}`);
+                throw error;
+            }
         }
 
-        const data = await response.json();
-        if (!data.candidates || !data.candidates[0]?.content?.parts[0]?.audio?.data) {
-            throw new Error('Invalid response format from Gemini API');
+        // --- TTS UTILITIES ---
+        let audioContext = null;
+
+        function getAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            return audioContext;
         }
 
-        const audioContent = data.candidates[0].content.parts[0].audio.data;
-        const audioBuffer = base64ToArrayBuffer(audioContent);
-        const audioBlob = new Blob([audioBuffer], { type: 'audio/wav' });
+        function base64ToArrayBuffer(base64) {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function pcmToWav(pcmData, sampleRate) {
+            const numChannels = 1;
+            const bitsPerSample = 16;
+            const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+            const blockAlign = numChannels * (bitsPerSample / 8);
+            const dataSize = pcmData.byteLength;
+            const riffSize = 36 + dataSize;
+
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+
+            // RIFF header
+            view.setUint32(0, 0x52494646, false); // "RIFF"
+            view.setUint32(4, riffSize, true);
+            view.setUint32(8, 0x57415645, false); // "WAVE"
+            // "fmt " sub-chunk
+            view.setUint32(12, 0x666d7420, false); // "fmt "
+            view.setUint32(16, 16, true); // Sub-chunk size
+            view.setUint16(20, 1, true); // Audio format (1 = PCM)
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, bitsPerSample, true);
+            // "data" sub-chunk
+            view.setUint32(36, 0x64617461, false); // "data"
+            view.setUint32(40, dataSize, true);
+
+            // Write PCM data
+            new Uint8Array(buffer, 44).set(new Uint8Array(pcmData));
+
+            return new Blob([buffer], { type: 'audio/wav' });
+        }
         
-        playAudio(audioBlob);
-        showMessage("Playing audio...", "success", 2000);
-    } catch (error) {
-        console.error('Error generating speech:', error);
-        showMessage('Sorry, there was an error generating the audio. Please try again.', 'error');
-    } finally {
-        hideLoading();
-    }
-}
+        async function playAudio(audioUrl) {
+            try {
+                const ctx = getAudioContext(); // Ensure context is initialized
+                // Resume context on user gesture if needed
+                if (ctx.state === 'suspended') {
+                    await ctx.resume();
+                }
+                const audio = new Audio(audioUrl);
+                await audio.play();
+            } catch (e) {
+                console.error("Error playing audio:", e);
+                showInlineMessage("Error playing audio. Please try again.", "error");
+            }
+        }
+
+        async function readQuestionAloud(buttonElement) {
+            if (!currentSentence) {
+                showInlineMessage("No sentence selected to read.", "error");
+                return;
+            }
+            
+            // Resume AudioContext on user gesture (click)
+            const ctx = getAudioContext();
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+
+            const originalText = buttonElement.innerHTML;
+            buttonElement.disabled = true;
+            buttonElement.innerHTML = `
+                <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v2m0 12v2m8-8h-2M4 12H2m15.364 6.364l-1.414-1.414M6.05 6.05l-1.414-1.414m12.728 0l-1.414 1.414M6.05 17.95l-1.414 1.414"></path></svg>
+                <span>Loading...</span>
+            `;
+
+            try {
+                const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${API_KEY}`;
+                
+                const payload = {
+                    contents: [{
+                        parts: [{ text: `Say clearly: ${currentSentence}` }]
+                    }],
+                    generationConfig: {
+                        responseModalities: ["AUDIO"],
+                        speechConfig: {
+                            voiceConfig: {
+                                prebuiltVoiceConfig: { voiceName: "Kore" } // A clear, standard voice
+                            }
+                        }
+                    },
+                    model: TTS_MODEL
+                };
+
+                const response = await apiCallWithBackoff(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                const part = result?.candidates?.[0]?.content?.parts?.[0];
+                const audioData = part?.inlineData?.data;
+                const mimeType = part?.inlineData?.mimeType;
+
+                if (audioData && mimeType && mimeType.startsWith("audio/")) {
+                    const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                    if (!sampleRateMatch) {
+                        throw new Error("Could not parse sample rate from mimeType: " + mimeType);
+                    }
+                    const sampleRate = parseInt(sampleRateMatch[1], 10);
+                    const pcmData = base64ToArrayBuffer(audioData);
+                    const wavBlob = pcmToWav(pcmData, sampleRate);
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    await playAudio(audioUrl);
+                } else {
+                    console.error("Invalid API response structure:", result);
+                    throw new Error("Invalid audio data received from API.");
+                }
+
+            } catch (error) {
+                console.error("TTS Error:", error);
+                showInlineMessage(`❌ Could not play audio: ${error.message}`, 'error');
+            } finally {
+                buttonElement.disabled = false;
+                buttonElement.innerHTML = originalText;
+            }
+        }
+        // --- END TTS UTILITIES ---
+
+        // Sentence banks for each unit
+        const sentenceBanks = {
+            intro: [],
+            unit1: [
+                "Hello! My name is ___.",
+                "Nice to meet you!",
+                "How are you today?",
+                "I am eight years old.",
+                "This is my friend, ___.",
+                "What is your name?"
+            ],
+            unit2: [
+                "I wake up at seven o'clock.",
+                "I brush my teeth every day.",
+                "I go to school by bus.",
+                "I play football after school.",
+                "I read a book before bed."
+            ],
+            unit3: [
+                "I am reading a story now.",
+                "She is drawing a cat.",
+                "We are playing in the garden.",
+                "He is listening to music.",
+                "They are talking to the teacher."
+            ],
+            unit4: [
+                "My birthday is in May.",
+                "It is rainy in November.",
+                "We go back to school in January.",
+                "Chinese New Year is in February.",
+                "It is hot and sunny today."
+            ],
+            unit5: [
+                "This is my new house.",
+                "The kitchen is next to the living room.",
+                "There is a big window in my bedroom.",
+                "The sofa is in the living room.",
+                "The cat is under the table."
+            ],
+            unit6: [
+                "I like apples and bananas.",
+                "I would like some rice, please.",
+                "Can I have a glass of water?",
+                "He doesn't like spicy food.",
+                "Let's make a sandwich!"
+            ],
+            unit7: [
+                "We are at the park today.",
+                "The library is next to the bank.",
+                "Can you help me find the post office?",
+                "I need to buy some medicine.",
+                "The museum is very interesting."
+            ],
+            unit8: [
+                "I was at home yesterday.",
+                "She went to the cinema last week.",
+                "We played games yesterday afternoon.",
+                "He was sick last Monday.",
+                "They visited their grandparents."
+            ],
+            unit9: [
+                "We went to the beach on holiday.",
+                "I took many photos of the mountains.",
+                "The hotel was very comfortable.",
+                "We tried delicious local food.",
+                "I bought souvenirs for my family."
+            ],
+            unit10: [
+                "We should protect the environment.",
+                "Recycling helps save the planet.",
+                "Plants need water and sunlight.",
+                "Animals live in different habitats.",
+                "We can reduce, reuse, and recycle."
+            ]
+        };
+
+        let currentPage = 'intro';
+        let isRecording = false;
+        let currentSentence = '';
+        let analysisResults = {
+            score: 0,
+            feedback: '',
+            words: []
+        };
+        let teacherView = false;
+        let practiceRecords = [];
+
+        // --- NEW: localStorage helper functions ---
+        const STORAGE_KEY = 'vocalPointRecords';
+
+        function loadRecordsFromStorage() {
+            const storedData = localStorage.getItem(STORAGE_KEY);
+            if (storedData) {
+                try {
+                    practiceRecords = JSON.parse(storedData);
+                } catch (e) {
+                    console.error("Failed to parse localStorage data:", e);
+                    practiceRecords = [];
+                }
+            } else {
+                practiceRecords = [];
+            }
+            // After loading, update the UI
+            updateAttemptLogFromData();
+            updateAnalyticsFromData();
+        }
+
+        function saveRecordsToStorage() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(practiceRecords));
+            } catch (e) {
+                console.error("Failed to save to localStorage:", e);
+                showInlineMessage("Error saving data. Storage might be full.", "error");
+            }
+            // After saving, update the UI
+            updateAttemptLogFromData();
+            updateAnalyticsFromData();
+        }
+        // --- END NEW localStorage helper functions ---
+
+        // --- SPEECH RECOGNITION (ASR) SETUP ---
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognitionInstance = null;
+        let currentTranscriptionInput = null; // Stores which input to populate
+        // --- END ASR SETUP ---
 
 
-// --- AI ANALYSIS (GEMINI) ---
-    
-// Main analysis function (Direct Gemini API call)
-async function analyzeSpeechWithGemini(goal, transcription) {
-    if (!transcription) {
-        showMessage("Please provide a transcription of your speech first.", "warning");
-        return;
-    }
-    
-    showLoading();
-    
-    try {
-        showMessage("Analyzing your pronunciation...", "info");
-        const systemPrompt = `
-            You are an expert English Language (ESL) pronunciation coach.
-            Compare the student's transcription to the goal sentence.
-            Analyze it for accuracy, omitted words, and mispronounced words.
-            Return a JSON object with:
-            - score (0-100): Pronunciation accuracy score
-            - feedback: Constructive feedback paragraph
-            - analysis: Array of word objects from goal sentence with:
-              - word: The word from goal sentence
-              - status: "correct", "mispronounced", or "omitted"
-              - note: Brief note for mistakes (optional)
-        `;
+        // Teacher view toggle function
+        function toggleTeacherView() {
+            teacherView = !teacherView;
+            const teacherColumn = document.getElementById('teacherColumn');
+            const teacherBanner = document.getElementById('teacherBanner');
+            const mainGrid = document.getElementById('mainGrid');
+            const studentColumn = document.getElementById('studentColumn');
+            const toggleBtn = document.getElementById('teacherToggle');
+            
+            if (teacherView) {
+                // Show teacher view
+                teacherColumn.style.display = 'block';
+                teacherBanner.style.display = 'block';
+                mainGrid.className = 'grid lg:grid-cols-3 gap-6 items-start';
+                studentColumn.className = 'lg:col-span-2 space-y-6';
+                
+                // Update button
+                toggleBtn.className = 'inline-flex items-center gap-2 px-3 py-2 rounded-xl border shadow-sm bg-slate-900 text-white hover:bg-slate-800 transition-colors';
+                toggleBtn.innerHTML = `
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/>
+                    </svg>
+                    <span class="text-sm font-medium">Hide Teacher View</span>
+                `;
+            } else {
+                // Hide teacher view
+                teacherColumn.style.display = 'none';
+                teacherBanner.style.display = 'none';
+                mainGrid.className = 'grid lg:grid-cols-2 gap-6 items-start';
+                studentColumn.className = 'lg:col-span-2 space-y-6';
+                
+                // Update button
+                toggleBtn.className = 'inline-flex items-center gap-2 px-3 py-2 rounded-xl border shadow-sm bg-white hover:bg-gray-50 transition-colors';
+                toggleBtn.innerHTML = `
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+                    </svg>
+                    <span class="text-sm font-medium">Show Teacher View</span>
+                `;
+            }
+        }
 
-        const response = await fetch(`${API_BASE_URL}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                contents: [{
-                    role: 'user',
-                    parts: [{
-                        text: `Goal: "${goal}"\nTranscription: "${transcription}"`
-                    }]
-                }],
+        // Keyboard shortcut for teacher view toggle
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'T' || e.key === 't') {
+                if (!e.target.matches('input, textarea')) {
+                    e.preventDefault();
+                    toggleTeacherView();
+                }
+            }
+        });
+        
+        // --- GEMINI AI ANALYSIS FUNCTION ---
+        async function analyzeSpeechWithGemini(sentence) {
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${API_KEY}`;
+            
+            // System instruction for the AI tutor to act as a pronunciation and fluency analyst
+            const systemPrompt = `You are a professional English language analyst. Your task is to provide detailed, constructive feedback and a numerical score for a student's attempt to speak a given sentence. The sentence provided below represents the student's transcribed speech.
+
+You must respond ONLY with a JSON object that strictly adheres to the provided schema.
+
+1.  **Analyze Fluency & Pronunciation**: Based on the transcribed text (simulating ASR output), analyze how well the student *likely* performed, noting common errors for this level (e.g., pace, intonation, linking sounds, common phonemes like 'th'). Since you don't have the audio, use a critical but supportive educational tone.
+2.  **Assign Score**: Assign an overall score from 0 to 100.
+3.  **Identify Words**: Identify 2-4 words that a student might typically struggle with in this sentence and assign a status (green=good, yellow=needs work, red=major difficulty) to each, simulating word-level feedback.
+
+Example input: "I like apples and benenas" (Goal: "I like apples and bananas")
+Example JSON output must contain:
+{
+  "score": 85,
+  "feedback": "Your attempt was very fluent! However, pay attention to the short 'a' sound, especially in words like 'bananas', which was transcribed as 'benenas'. Practice the vowel sound.",
+  "words": [
+    {"word": "like", "status": "green"},
+    {"word": "apples", "status": "yellow"},
+    {"word": "bananas", "status": "red"}
+  ]
+}`;
+            
+            const userQuery = `Analyze the student's spoken attempt: "${sentence}". The goal sentence was: "${currentSentence}".`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
                 systemInstruction: { parts: [{ text: systemPrompt }] },
                 generationConfig: {
-                    temperature: 0.1,
-                    topP: 0.8,
-                    topK: 40
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "score": { "type": "INTEGER", "description": "Overall score from 0 to 100." },
+                            "feedback": { "type": "STRING", "description": "Detailed, constructive feedback on fluency and pronunciation." },
+                            "words": {
+                                "type": "ARRAY",
+                                "description": "2 to 4 key words for specific feedback.",
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "word": { "type": "STRING" },
+                                        "status": { "type": "STRING", "enum": ["green", "yellow", "red"] }
+                                    }
+                                }
+                            }
+                        },
+                        required: ["score", "feedback", "words"]
+                    }
                 }
-            })
-        });
+            };
 
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            };
+
+            const response = await apiCallWithBackoff(apiUrl, options);
+            const result = await response.json();
+            
+            // Extract and parse the JSON response
+            const jsonString = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!jsonString) {
+                console.error("Invalid API response, missing text part:", result);
+                throw new Error("Gemini did not return structured JSON response.");
+            }
+            return JSON.parse(jsonString);
+
         }
 
-        const data = await response.json();
-        const analysis = JSON.parse(data.candidates[0].content.parts[0].text);
+
+        // Show specific page
+        function showPage(page, buttonElement) {
+            currentPage = page;
+            const content = document.getElementById('pageContent');
+            
+            // Update navigation active state
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('ring-2', 'ring-indigo-500');
+            });
+            if (buttonElement) {
+                buttonElement.classList.add('ring-2', 'ring-indigo-500');
+            }
+            
+            if (page === 'intro') {
+                content.innerHTML = getIntroPage();
+            } else if (page === 'custom') {
+                content.innerHTML = getCustomPage();
+            } else {
+                content.innerHTML = getUnitPage(page);
+            }
+            
+            content.classList.remove('fade-in');
+            // Ensure content exists before adding class
+            if(content) {
+                 setTimeout(() => content.classList.add('fade-in'), 10);
+            }
+        }
+
+        // Get introduction page
+        function getIntroPage() {
+            return `
+                <div class="bg-white rounded-2xl shadow-lg p-8">
+                    <div class="text-center mb-8">
+                        <div class="text-6xl mb-4">🎤</div>
+                        <h2 class="text-3xl font-bold text-indigo-900 mb-4">Welcome to VocalPoint AI!</h2>
+                        <p class="text-lg text-gray-600">Your AI-powered English speaking practice companion</p>
+                    </div>
+                    
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <div class="bg-blue-50 rounded-xl p-6">
+                            <h3 class="text-xl font-semibold text-blue-900 mb-3">📚 How It Works</h3>
+                            <ol class="space-y-2 text-blue-800">
+                                <li class="flex items-start gap-2">
+                                    <span class="bg-blue-200 text-blue-900 rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold shrink-0">1</span>
+                                    <span>Choose a unit and a sentence to practice</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="bg-blue-200 text-blue-900 rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold shrink-0">2</span>
+                                    <span>Click the microphone and speak clearly</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="bg-blue-200 text-blue-900 rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold shrink-0">3</span>
+                                    <span>Your speech is transcribed (or type it in)</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="bg-blue-200 text-blue-900 rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold shrink-0">4</span>
+                                    <span>Click "Analyze" to get instant feedback and a score.</span>
+                                </li>
+                            </ol>
+                        </div>
+                        
+                        <div class="bg-green-50 rounded-xl p-6">
+                            <h3 class="text-xl font-semibold text-green-900 mb-3">🎯 Feedback Colors</h3>
+                            <div class="space-y-3">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-4 h-4 bg-green-500 rounded-full shrink-0"></div>
+                                    <span class="text-green-800">Good job! Pronunciation is clear.</span>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <div class="w-4 h-4 bg-yellow-500 rounded-full shrink-0"></div>
+                                    <span class="text-yellow-800">Attention needed. Focus on this word.</span>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <div class="w-4 h-4 bg-red-500 rounded-full shrink-0"></div>
+                                    <span class="text-red-800">Try again. Significant difficulty.</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center mt-8">
+                        <button onclick="showPage('unit1', document.querySelector('.nav-btn[onclick*=\\'unit1\\']'))" class="bg-indigo-600 text-white px-8 py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                            Start with Unit 1: Welcome! →
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Get unit page
+        function getUnitPage(unit) {
+            const sentences = sentenceBanks[unit] || [];
+            const unitTitles = {
+                unit1: "Unit 1: Welcome!",
+                unit2: "Unit 2: Every Day",
+                unit3: "Unit 3: Right Now",
+                unit4: "Unit 4: Year In, Year Out",
+                unit5: "Unit 5: My New House",
+                unit6: "Unit 6: Food, Please!",
+                unit7: "Unit 7: Out And About",
+                unit8: "Unit 8: Yesterday",
+                unit9: "Unit 9: On Holiday",
+                unit10: "Unit 10: World Around Us"
+            };
+            
+            return `
+                <div class="space-y-6">
+                    <!-- Unit Header -->
+                    <div class="bg-white rounded-2xl shadow-lg p-6">
+                        <h2 class="text-2xl font-bold text-indigo-900 mb-2">${unitTitles[unit]}</h2>
+                        <p class="text-gray-600">Choose a sentence below to practice your pronunciation</p>
+                    </div>
+                    
+                    <!-- Sentence Selection -->
+                    <div class="bg-white rounded-2xl shadow-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">📝 Practice Sentences</h3>
+                        <div class="grid gap-3">
+                            ${sentences.map((sentence, index) => `
+                                <button onclick="selectSentence('${sentence.replace(/'/g, "\\'")}', this)" 
+                                        class="text-left p-4 rounded-lg border-2 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all">
+                                    <span class="text-gray-700">${sentence}</span>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                    
+                    <!-- Practice Area -->
+                    <div id="practiceArea" class="bg-white rounded-2xl shadow-lg p-6" style="display: none;">
+                        <h3 class="text-lg font-semibold mb-4">🎤 Practice Speaking</h3>
+                        <div class="bg-gray-50 rounded-lg p-4 mb-4">
+                            <p class="text-lg text-gray-800" id="selectedSentence"></p>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <button onclick="readQuestionAloud(this)" class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"></path></svg>
+                                <span>Read Goal Aloud</span>
+                            </button>
+                        </div>
+                        
+                        <div class="flex justify-center mb-6">
+                            <button id="recordBtn" onclick="toggleRecording()" 
+                                    class="bg-red-500 text-white p-6 rounded-full hover:bg-red-600 transition-colors">
+                                <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <!-- Input for simulated ASR transcription -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Your Transcription (What you said):</label>
+                            <input type="text" id="asrTranscription" placeholder="Click mic or type the sentence as you spoke it" class="w-full p-3 border border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-base">
+                        </div>
+
+                        <div class="text-center">
+                            <button id="analyzeBtn" onclick="initiateAnalysis('regular')" 
+                                    class="bg-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-indigo-700 transition-colors">
+                                🧠 Analyze Speech with AI
+                            </button>
+                            <p id="analysisLoading" class="text-sm text-gray-500 mt-2 hidden">Analyzing speech with Gemini...</p>
+                        </div>
+                        
+                        <div id="analysisResults" class="mt-6" style="display: none;">
+                            <h4 class="text-lg font-semibold mb-3">📊 AI Pronunciation Feedback</h4>
+                            <div id="aiFeedbackDetails" class="bg-gray-50 p-4 rounded-lg text-sm italic text-gray-700 mb-3"></div>
+                            <div id="wordFeedback" class="flex flex-wrap gap-2"></div>
+                            <div id="overallScore" class="mt-4 p-4 rounded-lg"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Get custom page
+        function getCustomPage() {
+            return `
+                <div class="bg-white rounded-2xl shadow-lg p-6">
+                    <h2 class="text-2xl font-bold text-indigo-900 mb-4">✏️ Write Your Own Sentence</h2>
+                    <p class="text-gray-600 mb-6">Type your own sentence and practice speaking it!</p>
+                    
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Your Custom Sentence:</label>
+                        <textarea id="customSentence" 
+                                  placeholder="Type your sentence here..."
+                                  class="w-full p-4 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none resize-none"
+                                  rows="3"></textarea>
+                    </div>
+                    
+                    <div class="text-center mb-6">
+                        <button onclick="useCustomSentence()" 
+                                class="bg-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-indigo-700 transition-colors">
+                            📝 Practice This Sentence
+                        </button>
+                    </div>
+                    
+                    <!-- Practice Area for Custom -->
+                    <div id="customPracticeArea" class="border-t pt-6" style="display: none;">
+                        <h3 class="text-lg font-semibold mb-4">🎤 Practice Speaking</h3>
+                        <div class="bg-gray-50 rounded-lg p-4 mb-4">
+                            <p class="text-lg text-gray-800" id="customSelectedSentence"></p>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <button onclick="readQuestionAloud(this)" class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"></path></svg>
+                                <span>Read Goal Aloud</span>
+                            </button>
+                        </div>
+                        
+                        <div class="flex justify-center mb-6">
+                            <button id="customRecordBtn" onclick="toggleCustomRecording()" 
+                                    class="bg-red-500 text-white p-6 rounded-full hover:bg-red-600 transition-colors">
+                                <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <!-- Input for simulated ASR transcription -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Your Transcription (What you said):</label>
+                            <input type="text" id="customAsrTranscription" placeholder="Click mic or type the sentence as you spoke it" class="w-full p-3 border border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-base">
+                        </div>
+
+                        <div class="text-center">
+                            <button id="customAnalyzeBtn" onclick="initiateAnalysis('custom')" 
+                                    class="bg-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-indigo-700 transition-colors">
+                                🧠 Analyze Speech with AI
+                            </button>
+                            <p id="customAnalysisLoading" class="text-sm text-gray-500 mt-2 hidden">Analyzing speech with Gemini...</p>
+                        </div>
+                        
+                        <div id="customAnalysisResults" class="mt-6" style="display: none;">
+                            <h4 class="text-lg font-semibold mb-3">📊 AI Pronunciation Feedback</h4>
+                            <div id="customAiFeedbackDetails" class="bg-gray-50 p-4 rounded-lg text-sm italic text-gray-700 mb-3"></div>
+                            <div id="customWordFeedback" class="flex flex-wrap gap-2"></div>
+                            <div id="customOverallScore" class="mt-4 p-4 rounded-lg"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Select sentence for practice
+        function selectSentence(sentence, buttonElement) {
+            currentSentence = sentence;
+            
+            // Find the practice area elements
+            const practiceArea = document.getElementById('practiceArea');
+            const selectedSentenceEl = document.getElementById('selectedSentence');
+            const asrInput = document.getElementById('asrTranscription');
+            const analysisResultsEl = document.getElementById('analysisResults');
+
+            if (practiceArea && selectedSentenceEl && asrInput && analysisResultsEl) {
+                selectedSentenceEl.textContent = sentence;
+                practiceArea.style.display = 'block';
+                analysisResultsEl.style.display = 'none';
+                // Pre-fill transcription with the correct sentence as a starting point
+                asrInput.value = sentence.replace(/__/g, "...");
+            }
+            
+            // Highlight selected sentence button
+            // First, remove highlight from all sentence buttons in this unit
+            const parentContainer = buttonElement.closest('.grid');
+            parentContainer.querySelectorAll('button').forEach(btn => {
+                 btn.classList.remove('border-indigo-500', 'bg-indigo-50', 'ring-2', 'ring-indigo-300');
+                 btn.classList.add('border-gray-200');
+            });
+            
+            // Then, add highlight to the clicked button
+            buttonElement.classList.add('border-indigo-500', 'bg-indigo-50', 'ring-2', 'ring-indigo-300');
+            buttonElement.classList.remove('border-gray-200');
+        }
+
+
+        // Use custom sentence
+        function useCustomSentence() {
+            const customText = document.getElementById('customSentence').value.trim();
+            if (!customText) {
+                // Use the custom inline message
+                showInlineMessage('Please type a sentence first!', 'error');
+                return;
+            }
+            
+            currentSentence = customText;
+            document.getElementById('customSelectedSentence').textContent = customText;
+            document.getElementById('customPracticeArea').style.display = 'block';
+            document.getElementById('customAnalysisResults').style.display = 'none';
+            // Pre-fill transcription with the custom sentence as a starting point
+            document.getElementById('customAsrTranscription').value = customText;
+        }
+
+        // --- MODIFIED RECORDING FUNCTIONS WITH LIVE ASR ---
         
-        // Update UI
-        displayAnalysis(analysis);
+        function stopRecordingVisuals(mode) {
+            const btnId = mode === 'custom' ? 'customRecordBtn' : 'recordBtn';
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            
+            // ENHANCEMENT: Remove pulse class
+            btn.classList.remove('mic-pulse', 'bg-red-600');
+            btn.classList.add('bg-red-500');
+            btn.innerHTML = `
+                <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                </svg>
+            `;
+            isRecording = false;
+        }
+
+        function startRecordingVisuals(mode) {
+            const btnId = mode === 'custom' ? 'customRecordBtn' : 'recordBtn';
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+
+            // ENHANCEMENT: Add pulse class
+            btn.classList.add('mic-pulse', 'bg-red-600');
+            btn.innerHTML = `
+                <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="6" width="12" height="12" rx="2"/>
+                </svg>
+            `;
+            isRecording = true;
+            showInlineMessage('🎤 Listening... Speak your sentence now.', 'info');
+        }
+
+        function setupSpeechRecognition() {
+            if (SpeechRecognition) {
+                recognitionInstance = new SpeechRecognition();
+                recognitionInstance.continuous = false;
+                recognitionInstance.lang = 'en-US';
+                recognitionInstance.interimResults = false;
+                recognitionInstance.maxAlternatives = 1;
+
+                recognitionInstance.onresult = (event) => {
+                    const transcript = event.results[0][0].transcript;
+                    if (currentTranscriptionInput) {
+                        currentTranscriptionInput.value = transcript;
+                        showInlineMessage('✅ Transcription complete! Click "Analyze".', 'success');
+                    }
+                };
+
+                recognitionInstance.onerror = (event) => {
+                    console.error("Speech Recognition Error:", event.error);
+                    let errorMsg = event.error;
+                    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                        errorMsg = "Microphone access denied. Please allow microphone permissions.";
+                    } else if (event.error === 'no-speech') {
+                        errorMsg = "No speech detected. Please try again.";
+                    } else if (event.error === 'audio-capture') {
+                         errorMsg = "No microphone found. Please check your hardware.";
+                    }
+                    showInlineMessage(`Mic error: ${errorMsg}`, 'error');
+                };
+                
+                recognitionInstance.onend = () => {
+                    if (isRecording) { // Only stop visuals if we were in a recording state
+                        const mode = currentTranscriptionInput && currentTranscriptionInput.id.startsWith('custom') ? 'custom' : 'regular';
+                        stopRecordingVisuals(mode);
+                    }
+                };
+            } else {
+                console.warn("Web Speech API not supported in this browser. App will fall back to manual text input.");
+            }
+        }
         
-        // Log attempt
-        logAttempt({
-            timestamp: new Date().toISOString(),
-            student_name: document.getElementById('studentName')?.value || 'Anonymous',
-            student_class: document.getElementById('studentClass')?.value || 'Unspecified',
-            sentence: goal,
-            transcription: transcription,
-            score: analysis.score,
-            feedback: analysis.feedback,
-            word_analysis: analysis.analysis
+        // This function REPLACES the old toggleRecording
+        function toggleRecording() {
+            if (!recognitionInstance) {
+                showInlineMessage('Live speech recognition not supported in this browser. Please type your transcription manually.', 'error');
+                return;
+            }
+
+            currentTranscriptionInput = document.getElementById('asrTranscription');
+            if (isRecording) {
+                recognitionInstance.stop(); // onend will handle visuals and state
+            } else {
+                try {
+                    recognitionInstance.start();
+                    startRecordingVisuals('regular');
+                } catch (e) {
+                    // This catches if it's already started
+                    console.error("Mic start error:", e);
+                    if (e.name === 'InvalidStateError') {
+                        showInlineMessage('Mic is already listening.', 'info');
+                    } else {
+                        showInlineMessage('Mic access might be blocked or already in use.', 'error');
+                    }
+                }
+            }
+        }
+
+        // This function REPLACES the old toggleCustomRecording
+        function toggleCustomRecording() {
+            if (!recognitionInstance) {
+                showInlineMessage('Live speech recognition not supported in this browser. Please type your transcription manually.', 'error');
+                return;
+            }
+            
+            currentTranscriptionInput = document.getElementById('customAsrTranscription');
+            if (isRecording) {
+                recognitionInstance.stop(); // onend will handle visuals and state
+            } else {
+                try {
+                    recognitionInstance.start();
+                    startRecordingVisuals('custom');
+                } catch (e) {
+                    console.error("Mic start error:", e);
+                     if (e.name === 'InvalidStateError') {
+                        showInlineMessage('Mic is already listening.', 'info');
+                    } else {
+                        showInlineMessage('Mic access might be blocked or already in use.', 'error');
+                    }
+                }
+            }
+        }
+        
+        // --- END OF MODIFIED RECORDING FUNCTIONS ---
+
+        // Initiate AI analysis
+        async function initiateAnalysis(mode) {
+            const btnId = mode === 'custom' ? 'customAnalyzeBtn' : 'analyzeBtn';
+            const loadingId = mode === 'custom' ? 'customAnalysisLoading' : 'analysisLoading';
+            const asrInputId = mode === 'custom' ? 'customAsrTranscription' : 'asrTranscription';
+            
+            const transcription = document.getElementById(asrInputId).value.trim();
+
+            if (!currentSentence) {
+                 showInlineMessage('Please select or type a sentence first!', 'error');
+                 return;
+            }
+            if (!transcription) {
+                showInlineMessage('Please provide your spoken transcription first!', 'error');
+                return;
+            }
+
+            const analyzeBtn = document.getElementById(btnId);
+            const loadingMessage = document.getElementById(loadingId);
+            
+            // Set loading state
+            analyzeBtn.disabled = true;
+            analyzeBtn.textContent = 'Analyzing...';
+            loadingMessage.classList.remove('hidden');
+
+            try {
+                // Call the Gemini API with the transcription as the 'spoken attempt'
+                const analysisData = await analyzeSpeechWithGemini(transcription);
+                
+                // Save the results globally
+                analysisResults = {
+                    score: analysisData.score,
+                    feedback: analysisData.feedback,
+                    words: analysisData.words
+                };
+                
+                // Display the results
+                if (mode === 'custom') {
+                    displayAnalysis('customWordFeedback', 'customOverallScore', 'customAnalysisResults', 'customAiFeedbackDetails');
+                } else {
+                    displayAnalysis('wordFeedback', 'overallScore', 'analysisResults', 'aiFeedbackDetails');
+                }
+
+            } catch (error) {
+                console.error("AI Analysis Error:", error);
+                showInlineMessage(`❌ Analysis failed: ${error.message}`, 'error');
+            } finally {
+                // Reset loading state
+                analyzeBtn.disabled = false;
+                analyzeBtn.textContent = '🧠 Analyze Speech with AI';
+                loadingMessage.classList.add('hidden');
+            }
+        }
+
+
+        // Display analysis results
+        function displayAnalysis(wordFeedbackId, overallScoreId, resultsId, feedbackDetailsId) {
+            const wordFeedback = document.getElementById(wordFeedbackId);
+            const overallScore = document.getElementById(overallScoreId);
+            const results = document.getElementById(resultsId);
+            const feedbackDetails = document.getElementById(feedbackDetailsId);
+            
+            // Clear previous results
+            wordFeedback.innerHTML = '';
+            
+            // Display word-by-word feedback
+            if (analysisResults.words && Array.isArray(analysisResults.words)) {
+                analysisResults.words.forEach(result => {
+                    const wordSpan = document.createElement('span');
+                    wordSpan.textContent = result.word;
+                    wordSpan.className = `word-feedback px-3 py-2 rounded-lg font-medium ${getWordColorClass(result.status)}`;
+                    wordFeedback.appendChild(wordSpan);
+                });
+            }
+            
+            // Display detailed feedback
+            feedbackDetails.textContent = analysisResults.feedback;
+            
+            // Use the score provided by Gemini
+            const score = analysisResults.score;
+            
+            let scoreClass, scoreEmoji, scoreMessage;
+            if (score >= 80) {
+                scoreClass = 'bg-green-100 text-green-800 border-green-200';
+                scoreEmoji = '🎉';
+                scoreMessage = 'Excellent pronunciation and fluency!';
+            } else if (score >= 60) {
+                scoreClass = 'bg-yellow-100 text-yellow-800 border-yellow-200';
+                scoreEmoji = '👍';
+                scoreMessage = 'Good job! Keep practicing the suggested words.';
+            } else {
+                scoreClass = 'bg-red-100 text-red-800 border-red-200';
+                scoreEmoji = '💪';
+                scoreMessage = 'Needs practice. Focus on the core feedback from the AI.';
+            }
+            
+            overallScore.className = `p-4 rounded-lg border-2 ${scoreClass}`;
+            overallScore.innerHTML = `
+                <div class="text-center">
+                    <div class="text-2xl mb-2">${scoreEmoji}</div>
+                    <div class="text-xl font-bold">AI Score: ${score}%</div>
+                    <div class="text-sm">${scoreMessage}</div>
+                </div>
+            `;
+            
+            results.style.display = 'block';
+
+            // Show submit button
+            const submitContainer = results.querySelector('.submit-container');
+            if (!submitContainer) {
+                const newSubmitContainer = document.createElement('div');
+                newSubmitContainer.className = 'text-center mt-4 submit-container';
+                newSubmitContainer.innerHTML = `
+                    <button onclick="submitAttempt()" 
+                            class="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition-colors">
+                        📝 Submit to Teacher Log
+                    </button>
+                `;
+                results.appendChild(newSubmitContainer);
+            }
+        }
+
+        // Get word color class
+        function getWordColorClass(status) {
+            const classes = {
+                green: 'bg-green-100 text-green-800 border border-green-200',
+                yellow: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+                red: 'bg-red-100 text-red-800 border border-red-200'
+            };
+            return classes[status] || classes.green;
+        }
+
+        // Update student info in teacher fields
+        function updateStudentInfo() {
+            const studentName = document.getElementById('studentName').value;
+            const studentClass = document.getElementById('studentClass').value;
+            
+            const pupilNameField = document.getElementById('pupilName');
+            const pupilClassField = document.getElementById('pupilClass');
+            
+            if (pupilNameField) pupilNameField.value = studentName;
+            if (pupilClassField) pupilClassField.value = studentClass;
+        }
+
+        // Submit attempt to teacher log
+        async function submitAttempt() {
+            if (!analysisResults.words || analysisResults.words.length === 0) {
+                showInlineMessage('Please analyze your speech first!', 'error');
+                return;
+            }
+            
+            if (practiceRecords.length >= 999) {
+                showInlineMessage('Maximum limit of 999 practice records reached. Please ask your teacher to clear some old records.', 'error');
+                return;
+            }
+            
+            const submitBtn = document.querySelector('.submit-container button');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '⏳ Saving to Log...';
+            }
+            
+            const studentName = document.getElementById('studentName').value;
+            const studentClass = document.getElementById('studentClass').value;
+            const score = analysisResults.score;
+            
+            const unitTitles = {
+                unit1: "Unit 1: Welcome!",
+                unit2: "Unit 2: Every Day",
+                unit3: "Unit 3: Right Now",
+                unit4: "Unit 4: Year In, Year Out",
+                unit5: "Unit 5: My New House",
+                unit6: "Unit 6: Food, Please!",
+                unit7: "Unit 7: Out And About",
+                unit8: "Unit 8: Yesterday",
+                unit9: "Unit 9: On Holiday",
+                unit10: "Unit 10: World Around Us",
+                custom: "Custom Sentence"
+            };
+            
+            // Create practice record
+            const practiceRecord = {
+                id: Date.now().toString(),
+                timestamp: new Date().toISOString(),
+                student_name: studentName || 'Anonymous',
+                student_class: studentClass || 'Unknown',
+                unit_name: unitTitles[currentPage] || 'Unknown Unit',
+                sentence_text: currentSentence,
+                pronunciation_score: score,
+                // Store the AI's detailed feedback and word-level analysis
+                word_analysis: JSON.stringify({ words: analysisResults.words, feedback: analysisResults.feedback }),
+                teacher_feedback: document.getElementById('teacherFeedback')?.value || '',
+                session_date: new Date().toLocaleDateString()
+            };
+            
+            // Save to browser's localStorage
+            try {
+                // Add the new record to the front of the array
+                practiceRecords.unshift(practiceRecord);
+                
+                // Keep the list from getting too big
+                if (practiceRecords.length > 999) {
+                    practiceRecords.pop(); // Remove the oldest one
+                }
+
+                saveRecordsToStorage(); // Save the whole array back to localStorage
+                
+                const feedbackField = document.getElementById('teacherFeedback');
+                if (feedbackField) feedbackField.value = '';
+                
+                showInlineMessage('✅ Practice saved to browser log successfully!', 'success');
+
+            } catch (error) {
+                console.error("Failed to save to localStorage:", error);
+                showInlineMessage('❌ Failed to save to browser log. Storage might be full.', 'error');
+            }
+            
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '📝 Submit to Teacher Log';
+            }
+        }
+        
+        // Show inline message
+        function showInlineMessage(message, type) {
+            const existingMessage = document.getElementById('inlineMessage');
+            if (existingMessage) {
+                existingMessage.remove();
+            }
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.id = 'inlineMessage';
+            messageDiv.className = `fixed top-4 right-4 px-4 py-3 rounded-lg shadow-lg z-50 ${
+                type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 
+                (type === 'error' ? 'bg-red-100 text-red-800 border border-red-200' : 'bg-blue-100 text-blue-800 border border-blue-200')
+            }`;
+            messageDiv.textContent = message;
+            
+            document.body.appendChild(messageDiv);
+            
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.remove();
+                }
+            }, 4000);
+        }
+
+        // Update attempt log from data
+        function updateAttemptLogFromData() {
+            const logDiv = document.getElementById('attemptLog');
+            if (!logDiv) return;
+            
+            if (practiceRecords.length === 0) {
+                logDiv.innerHTML = `
+                    <div class="text-center text-gray-500 py-4">
+                        <p class="text-sm">No practice records in log yet</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Sort by timestamp (newest first) and show last 5
+            const sortedRecords = [...practiceRecords].sort((a, b) => 
+                new Date(b.timestamp) - new Date(a.timestamp)
+            );
+            const recentRecords = sortedRecords.slice(0, 5);
+            
+            logDiv.innerHTML = `
+                <!-- ENHANCEMENT: Added custom-scrollbar class -->
+                <div class="space-y-3 max-h-64 overflow-y-auto custom-scrollbar pr-2">
+                    ${recentRecords.map(record => `
+                        <div class="border border-gray-200 rounded-lg p-3">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="font-medium text-sm">${record.student_name}</div>
+                                <div class="text-xs text-gray-500">${new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                            </div>
+                            <div class="text-xs text-gray-600 mb-1">${record.unit_name}</div>
+                            <div class="text-sm text-gray-800 mb-2">"${record.sentence_text.substring(0, 40)}..."</div>
+                            <div class="flex justify-between items-center">
+                                <div class="text-xs ${record.pronunciation_score >= 80 ? 'text-green-600' : record.pronunciation_score >= 60 ? 'text-yellow-600' : 'text-red-600'}">
+                                    AI Score: ${record.pronunciation_score}%
+                                </div>
+                                ${record.teacher_feedback ? `<div class="text-xs text-blue-600">📝 Has feedback</div>` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                ${practiceRecords.length > 5 ? `<div class="text-xs text-gray-500 text-center mt-2">Showing 5 of ${practiceRecords.length} records from log</div>` : ''}
+            `;
+        }
+
+        // ENHANCEMENT: Replaced function with V5's richer analytics
+        function updateAnalyticsFromData() {
+            const totalAttemptsEl = document.getElementById('totalAttempts');
+            const avgScoreEl = document.getElementById('avgScore');
+            const commonMistakesEl = document.getElementById('commonMistakes');
+            const unitsPracticedEl = document.getElementById('unitsPracticed');
+            const recentPerformanceEl = document.getElementById('recentPerformance');
+
+            if (!totalAttemptsEl) return; // In case view isn't open
+            
+            const numAttempts = practiceRecords.length;
+            totalAttemptsEl.textContent = numAttempts;
+            
+            if (numAttempts === 0) {
+                avgScoreEl.textContent = 'N/A';
+                commonMistakesEl.innerHTML = '<p class="text-gray-500">No data.</p>';
+                unitsPracticedEl.textContent = '0';
+                recentPerformanceEl.innerHTML = '';
+                return;
+            }
+
+            // Calculate Average Score
+            const totalScore = practiceRecords.reduce((sum, rec) => sum + (rec.pronunciation_score || 0), 0);
+            const avgScore = (totalScore / numAttempts).toFixed(1);
+            avgScoreEl.textContent = `${avgScore}%`;
+            
+            // Find Common Mistakes
+            const mistakeCounts = {};
+            practiceRecords.forEach(record => {
+                try {
+                    // V1 stores analysis as a JSON string: {words: [...], feedback: "..."}
+                    if (record.word_analysis) {
+                        const analysis = JSON.parse(record.word_analysis);
+                        if (analysis && analysis.words && Array.isArray(analysis.words)) {
+                            analysis.words.forEach(word => {
+                                // Use V1's 'red' and 'yellow' as mistake indicators
+                                if (word.status === 'red' || word.status === 'yellow') {
+                                    const w = word.word.toLowerCase().replace(/[^a-z\s]/g, '').trim(); // Clean word
+                                    if(w) {
+                                       mistakeCounts[w] = (mistakeCounts[w] || 0) + 1;
+                                    }
+                                }
+                            });
+                        }
+                    }
+                } catch(e) {
+                    console.warn("Could not parse word analysis for record:", record, e);
+                }
+            });
+            
+            const sortedMistakes = Object.entries(mistakeCounts)
+                .sort(([,a],[,b]) => b - a)
+                .slice(0, 5); // Top 5
+                    
+            if (sortedMistakes.length > 0) {
+                commonMistakesEl.innerHTML = sortedMistakes
+                    .map(([word, count]) => `<div>${word} <span class="text-gray-500">(${count} times)</span></div>`)
+                    .join('');
+            } else {
+                commonMistakesEl.innerHTML = '<p class="text-gray-500">No common mistakes found!</p>';
+            }
+
+            // Calculate Units Practiced
+            const practicedUnits = new Set(practiceRecords.map(r => r.unit_name));
+            unitsPracticedEl.textContent = practicedUnits.size;
+
+            // Show Recent Performance (last 5)
+            recentPerformanceEl.innerHTML = '';
+            // Sort by timestamp (newest first) to get recent
+            const recentRecords = [...practiceRecords].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 5).reverse(); // reverse to show oldest of the 5 first
+            
+            recentRecords.forEach(record => {
+                const bar = document.createElement('div');
+                bar.className = 'perf-bar';
+                bar.title = `${record.unit_name}: ${record.pronunciation_score}%`;
+                
+                const fill = document.createElement('div');
+                fill.className = 'perf-bar-fill';
+                fill.style.height = `${record.pronunciation_score || 0}%`;
+                
+                bar.appendChild(fill);
+                recentPerformanceEl.appendChild(bar);
+            });
+        }
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', async function() {
+            try {
+                // Load records from localStorage
+                loadRecordsFromStorage();
+                
+                // NEW: Setup Speech Recognition
+                setupSpeechRecognition();
+
+                // Find the intro button and call showPage with it
+                const introButton = document.querySelector('.nav-btn[onclick*="\'intro\'"]');
+                if (introButton) {
+                    showPage('intro', introButton);
+                } else {
+                    console.error("Intro button not found!");
+                    // Fallback just in case
+                    showPage('intro', null);
+                }
+            } catch (error) {
+                console.error("Error during app initialization:", error);
+                document.body.innerHTML = `<div class="p-4 bg-red-100 text-red-800">A critical error occurred during initialization: ${error.message}. Please reload.</div>`;
+            }
         });
-        
-        // Update analytics
-        updateAnalytics();
-        
-        return analysis;
-    } catch (error) {
-        console.error('Error calling Gemini API:', error);
-        showMessage('Sorry, there was an error analyzing your speech. Please try again.', 'error');
-        throw error;
-    } finally {
-        hideLoading();
-    }
-
-	if (!GOOGLE_SCRIPT_URL) {
-		showMessage("App is not configured. Missing Google Script URL.", "error");
-		return;
-	}
-
-	showMessage("Analyzing speech with AI...", "info");
-	document.getElementById("analysisContainer").classList.add("hidden");
-
-	// Rate limit check
-	const now = Date.now();
-	const timeSinceLastCall = now - lastApiCallTime;
-	if (timeSinceLastCall < RATE_LIMIT_MS) {
-		const waitTime = RATE_LIMIT_MS - timeSinceLastCall;
-		showMessage(`Rate limit: Please wait ${Math.ceil(waitTime / 1000)}s...`, 'info', 2000);
-		await new Promise(resolve => setTimeout(resolve, waitTime));
-	}
-	lastApiCallTime = Date.now();
-
-	const payload = {
-		action: "analyzeSpeech",
-		goal: goal,
-		transcription: transcription
-	};
-
-	try {
-		const response = await fetch(GOOGLE_SCRIPT_URL, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify(payload)
-		});
-
-		if (!response.ok) {
-			throw new Error(`Server error: ${response.status}`);
-		}
-
-		const result = await response.json();
-
-		if (result.result === "error") {
-			console.error("Server-side error (Analysis):", result.message);
-			showMessage(`Analysis failed: ${result.message}`, "error");
-			currentAnalysis = null;
-			return;
-		}
-
-		// Parse the analysis results from the server
-		const analysisResults = result.data;
-		if (analysisResults && typeof analysisResults === 'object' && 
-			'score' in analysisResults && 
-			'feedback' in analysisResults && 
-			'analysis' in analysisResults) {
-			currentAnalysis = analysisResults; // Save for logging
-			displayAnalysis(analysisResults);
-			hideMessage(0); // Hide "Analyzing..."
-		} else {
-			console.error("Invalid response structure from server:", result);
-			showMessage("Analysis failed: Could not parse AI response.", "error");
-			currentAnalysis = null;
-		}
-	} catch (error) {
-		console.error("Error calling Google Script for analysis:", error);
-		showMessage("Analysis failed: Error processing AI feedback.", "error");
-		currentAnalysis = null;
-	}
-}
-
-// Display the results in the UI
-function displayAnalysis(analysisResults) {
-	document.getElementById("analysisContainer").classList.remove("hidden");
-    
-	const scoreEl = document.getElementById("score");
-	const coloredTextEl = document.getElementById("coloredText");
-	const feedbackDetails = document.getElementById("aiFeedbackDetails");
-
-	scoreEl.textContent = `${analysisResults.score}%`;
-	feedbackDetails.textContent = analysisResults.feedback;
-
-	coloredTextEl.innerHTML = ''; // Clear previous results
-	analysisResults.analysis.forEach(wordInfo => {
-		const span = document.createElement('span');
-		span.className = `word ${wordInfo.status}`;
-		span.textContent = wordInfo.word;
-		if (wordInfo.note) {
-			span.title = wordInfo.note; // Show note on hover
-		}
-		coloredTextEl.appendChild(span);
-		coloredTextEl.appendChild(document.createTextNode(' ')); // Add space
-	});
-}
-
-// --- UI & PAGE NAVIGATION ---
-
-function getIntroPage() {
-	return `
-			<h2 class="text-2xl font-bold text-gray-900 mb-4">📖 How to Use VocalPoint</h2>
-			<div class="space-y-4 text-gray-700">
-				<p>Welcome! This kiosk helps you practice your English pronunciation.</p>
-				<ol class="list-decimal list-inside space-y-2">
-					<li>Select a unit from the buttons above (e.g., "Unit 1: Welcome!").</li>
-					<li>Choose a goal sentence you want to practice.</li>
-					<li>Click the <strong>Read Goal Aloud</strong> button ( <svg class="inline h-5 w-5" fill="currentColor" viewbox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg> ) to hear the correct pronunciation.</li>
-					<li>Click the <strong>Microphone</strong> button ( <svg class="inline h-5 w-5" fill="currentColor" viewbox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1.2-9.1c0-.66.54-1.2 1.2-1.2s1.2.54 1.2 1.2v6.1c0 .66-.54 1.2-1.2 1.2s-1.2-.54-1.2-1.2V4.9zm6.7 6.1c0 3-2.54 5.1-5.5 5.1s-5.5-2.1-5.5-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-2.18c3.28-.49 6-3.31 6-6.72h-1.5z"/></svg> ). Speak the sentence clearly.</li>
-					<li>Your speech will be automatically transcribed into the text box. (You can also type it manually).</li>
-					<li>Click <strong>Analyze Speech with AI</strong>.</li>
-					<li>Review your score, see which words were correct, and read the AI's detailed feedback!</li>
-				</ol>
-				<p>If you're in a class, fill in your name and section. Then click <strong>Submit to Teacher Log</strong> to save your attempt.</p>
-			</div>
-		`;
-}
-
-function getUnitPage(unit) {
-	currentAnalysis = null; // Clear analysis
-	const sentences = unit.sentences;
-	let sentenceButtons = sentences.map((s, index) => 
-		// Fix apostrophe issue by escaping it for the string
-		`<button class="w-full text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg" onclick="selectSentence('${s.replace(/'/g, "\\'")}', this)">
-				${s}
-			</button>`
-	).join('');
-
-	return `
-			<h2 class="text-2xl font-bold text-gray-900 mb-4">${unit.title}</h2>
-			<p class="text-gray-600 mb-4">Select a sentence to practice:</p>
-			<div class="space-y-2 h-48 overflow-y-auto custom-scrollbar pr-2">${sentenceButtons}</div>
-            
-			<hr class="my-6">
-            
-			<div>
-				<label class="block text-sm font-medium text-gray-700">Goal Sentence</label>
-				<div class="mt-1 flex items-center gap-2">
-					<input type="text" id="goalSentence" class="flex-1 block w-full px-3 py-2 bg-gray-100 border border-gray-300 rounded-md shadow-sm text-gray-600" value="Please select a sentence" readonly>
-					<button onclick="readQuestionAloud()" title="Read Goal Aloud" class="p-2 bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors">
-						<svg class="w-6 h-6" fill="currentColor" viewbox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-					</button>
-				</div>
-			</div>
-
-			<div class="mt-4">
-				<label for="transcription" class="block text-sm font-medium text-gray-700">Your Transcription (Speak or Type)</label>
-				<div class="mt-1 flex items-center gap-2">
-					<input type="text" id="transcription" class="flex-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="Click the mic to speak...">
-					<button id="micBtn" onclick="toggleRecording('micBtn')" title="Record Speech" class="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors">
-						 <svg class="w-6 h-6" fill="currentColor" viewbox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1.2-9.1c0-.66.54-1.2 1.2-1.2s1.2.54 1.2 1.2v6.1c0 .66-.54 1.2-1.2 1.2s-1.2-.54-1.2-1.2V4.9zm6.7 6.1c0 3-2.54 5.1-5.5 5.1s-5.5-2.1-5.5-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-2.18c3.28-.49 6-3.31 6-6.72h-1.5z" /></svg>
-					</button>
-				</div>
-			</div>
-            
-			<div class="mt-6 flex flex-col sm:flex-row gap-3">
-				<button onclick="analyzeUnitSpeech()" class="flex-1 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition-colors">
-					Analyze Speech with AI
-				</button>
-				<button onclick="submitAttempt()" class="flex-1 px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition-colors">
-					Submit to Teacher Log
-				</button>
-			</div>
-		`;
-}
-
-function getCustomPage() {
-	currentAnalysis = null; // Clear analysis
-	currentGoal = ''; // Clear goal
-    
-	return `
-			<h2 class="text-2xl font-bold text-gray-900 mb-4">✏️ Write Your Own</h2>
-			<p class="text-gray-600 mb-4">Type a custom sentence to practice. The AI will analyze it.</p>
-            
-			<div>
-				<label for="customGoalSentence" class="block text-sm font-medium text-gray-700">Your Custom Goal Sentence</label>
-				<div class="mt-1 flex items-center gap-2">
-					<input type="text" id="customGoalSentence" class="flex-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="e.g., The quick brown fox jumps over the lazy dog" onchange="updateCustomGoal(this.value)">
-					<button onclick="readQuestionAloud()" title="Read Goal Aloud" class="p-2 bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors">
-						<svg class="w-6 h-6" fill="currentColor" viewbox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-					</button>
-				</div>
-			</div>
-
-			<div class="mt-4">
-				<label for="customTranscription" class="block text-sm font-medium text-gray-700">Your Transcription (Speak or Type)</label>
-				<div class="mt-1 flex items-center gap-2">
-					<input type="text" id="customTranscription" class="flex-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="Click the mic to speak...">
-					<button id="customMicBtn" onclick="toggleCustomRecording('customMicBtn')" title="Record Speech" class="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors">
-						 <svg class="w-6 h-6" fill="currentColor" viewbox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1.2-9.1c0-.66.54-1.2 1.2-1.2s1.2.54 1.2 1.2v6.1c0 .66-.54 1.2-1.2 1.2s-1.2-.54-1.2-1.2V4.9zm6.7 6.1c0 3-2.54 5.1-5.5 5.1s-5.5-2.1-5.5-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-2.18c3.28-.49 6-3.31 6-6.72h-1.5z" /></svg>
-					</button>
-				</div>
-			</div>
-            
-			<div class="mt-6 flex flex-col sm:flex-row gap-3">
-				<button onclick="analyzeCustomSpeech()" class="flex-1 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition-colors">
-					Analyze Speech with AI
-				</button>
-				<button onclick="submitAttempt()" class="flex-1 px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition-colors">
-					Submit to Teacher Log
-				</button>
-			</div>
-		`;
-}
-
-// Show specific page
-function showPage(page, buttonElement) {
-	currentPage = page;
-	const content = document.getElementById('pageContent');
-    
-	// Update navigation active state
-	document.querySelectorAll('.nav-btn').forEach(btn => {
-		btn.classList.remove('ring-2', 'ring-indigo-500');
-	});
-	if (buttonElement) {
-		buttonElement.classList.add('ring-2', 'ring-indigo-500');
-	}
-    
-	if (page === 'intro') {
-		content.innerHTML = getIntroPage();
-	} else if (page === 'custom') {
-		content.innerHTML = getCustomPage();
-	} else {
-		const unitData = UNITS[page];
-		if (unitData) {
-			content.innerHTML = getUnitPage(unitData);
-		}
-	}
-	// Reset analysis display
-	document.getElementById("analysisContainer").classList.add("hidden");
-	document.getElementById("score").textContent = "...";
-	document.getElementById("coloredText").innerHTML = "";
-	document.getElementById("aiFeedbackDetails").textContent = "...";
-	// NEW: Clear teacher feedback
-	const teacherFeedbackEl = document.getElementById('teacherFeedback');
-	if (teacherFeedbackEl) {
-		teacherFeedbackEl.value = '';
-	}
-}
-
-// Handle sentence selection
-function selectSentence(sentence, buttonElement) {
-	currentGoal = sentence;
-	document.getElementById('goalSentence').value = sentence;
-    
-	// Highlight selected sentence
-	document.querySelectorAll('#pageContent button').forEach(btn => {
-		btn.classList.remove('bg-indigo-100', 'font-semibold');
-	});
-	buttonElement.classList.add('bg-indigo-100', 'font-semibold');
-}
-    
-// Handle custom sentence update
-function updateCustomGoal(sentence) {
-	currentGoal = sentence;
-}
-    
-// Trigger analysis for unit pages
-function analyzeUnitSpeech() {
-	const goal = document.getElementById('goalSentence').value;
-	const transcription = document.getElementById('transcription').value;
-    
-	if (!goal || goal === "Please select a sentence") {
-		showMessage("Please select a sentence to practice first.", "warning");
-		return;
-	}
-	analyzeSpeechWithGemini(goal, transcription);
-}
-    
-// Trigger analysis for custom page
-function analyzeCustomSpeech() {
-	const goal = document.getElementById('customGoalSentence').value;
-	const transcription = document.getElementById('customTranscription').value;
-
-	if (!goal) {
-		showMessage("Please type in your custom goal sentence first.", "warning");
-		return;
-	}
-	analyzeSpeechWithGemini(goal, transcription);
-}
-    
-// Toggle teacher view
-function toggleTeacherView() {
-	isTeacherView = !isTeacherView;
-	const teacherView = document.getElementById('teacherView');
-	const mainGrid = document.getElementById('mainGrid');
-	const toggleBtn = document.getElementById('teacherToggle');
-    
-	if (isTeacherView) {
-		teacherView.style.display = 'block';
-		mainGrid.classList.remove('lg:grid-cols-2');
-		mainGrid.classList.add('lg:grid-cols-2'); // Keep 2 cols
-		toggleBtn.classList.add('ring-2', 'ring-indigo-500');
-		loadRecordsFromStorage(); // Refresh data
-	} else {
-		teacherView.style.display = 'none';
-		mainGrid.classList.remove('lg:grid-cols-2'); // Go back to 1 col
-		toggleBtn.classList.remove('ring-2', 'ring-indigo-500');
-	}
-}
-    
-// Show user messages
-function showMessage(message, type = 'info', duration = 4000) {
-	const msgBox = document.getElementById('messageBox');
-	msgBox.textContent = message;
-	msgBox.className = 'p-4 rounded-lg'; // Reset classes
-    
-	if (type === 'error') {
-		msgBox.classList.add('bg-red-100', 'text-red-800');
-	} else if (type === 'warning') {
-		msgBox.classList.add('bg-yellow-100', 'text-yellow-800');
-	} else { // info
-		msgBox.classList.add('bg-blue-100', 'text-blue-800');
-	}
-    
-	msgBox.classList.remove('hidden');
-    
-	if (duration > 0) {
-		 setTimeout(() => {
-			msgBox.classList.add('hidden');
-		}, duration);
-	}
-}
-
-// Hide message
-function hideMessage(delay = 0) {
-	setTimeout(() => {
-		document.getElementById('messageBox').classList.add('hidden');
-	}, delay);
-}
-
-// --- DATA STORAGE & TEACHER LOG ---
-
-// Load records from localStorage
-function loadRecordsFromStorage() {
-	const recordsJSON = localStorage.getItem('vocalPointRecords');
-	allRecords = recordsJSON ? JSON.parse(recordsJSON) : [];
-	updateLog();
-	updateAnalytics();
-}
-
-// Save records to localStorage
-function saveRecordsToStorage() {
-	localStorage.setItem('vocalPointRecords', JSON.stringify(allRecords));
-	updateLog();
-	updateAnalytics();
-}
-    
-// Clear localStorage
-function clearLocalStorage() {
-	allRecords = [];
-	localStorage.removeItem('vocalPointRecords');
-	updateLog();
-	updateAnalytics();
-	showMessage("Local logs cleared successfully.", "info", 2000);
-}
-
-// Update the visual log
-function updateLog() {
-	const logEl = document.getElementById('log');
-	if (!logEl) return;
-    
-	logEl.innerHTML = ''; // Clear log
-	if (allRecords.length === 0) {
-		logEl.innerHTML = '<p class="text-gray-500">No attempts logged yet.</p>';
-		return;
-	}
-
-	// Show newest first
-	[...allRecords].reverse().forEach(record => {
-		const el = document.createElement('div');
-		el.className = 'p-3 bg-gray-50 rounded-lg border border-gray-200';
-		el.innerHTML = `
-				<div class="flex justify-between items-start">
-					<span class="font-medium text-gray-800">${record.unit_name}: <span class="font-normal text-gray-600">"${record.sentence_text}"</span></span>
-					<span class="text-lg font-bold text-indigo-600">${record.pronunciation_score}%</span>
-				</div>
-				<div class="text-sm text-gray-500 mt-1">
-					<span>${record.student_name} (${record.student_class})</span> |
-					<span>${new Date(record.timestamp).toLocaleString()}</span>
-				</div>
-				<!-- NEW: Show teacher feedback -->
-				${record.teacher_feedback ? `<div class="mt-2 p-2 bg-yellow-50 text-yellow-800 text-sm rounded-md"><strong>Note:</strong> ${record.teacher_feedback}</div>` : ''}
-			`;
-		logEl.appendChild(el);
-	});
-}
-    
-// Update the analytics panel
-function updateAnalytics() {
-	const totalAttemptsEl = document.getElementById('totalAttempts');
-	const avgScoreEl = document.getElementById('avgScore');
-	const commonMistakesEl = document.getElementById('commonMistakes');
-	// NEW: Get new elements
-	const unitsPracticedEl = document.getElementById('unitsPracticed');
-	const recentPerformanceEl = document.getElementById('recentPerformance');
-
-
-	if (!totalAttemptsEl) return; // In case view isn't open
-    
-	const numAttempts = allRecords.length;
-	totalAttemptsEl.textContent = numAttempts;
-    
-	if (numAttempts === 0) {
-		avgScoreEl.textContent = 'N/A';
-		commonMistakesEl.innerHTML = '<p class="text-gray-500">No data.</p>';
-		unitsPracticedEl.textContent = '0';
-		recentPerformanceEl.innerHTML = '';
-		return;
-	}
-
-	// Calculate Average Score
-	const totalScore = allRecords.reduce((sum, rec) => sum + rec.pronunciation_score, 0);
-	const avgScore = (totalScore / numAttempts).toFixed(1);
-	avgScoreEl.textContent = `${avgScore}%`;
-    
-	// Find Common Mistakes
-	const mistakeCounts = {};
-	allRecords.forEach(record => {
-		try {
-			// Parse the JSON string
-			const analysis = JSON.parse(record.word_analysis);
-			analysis.forEach(word => {
-				if (word.status === 'mispronounced' || word.status === 'omitted') {
-					const w = word.word.toLowerCase().replace(/[^a-z]/g, ''); // Clean word
-					if(w) {
-					   mistakeCounts[w] = (mistakeCounts[w] || 0) + 1;
-					}
-				}
-			});
-		} catch(e) {
-			console.warn("Could not parse word analysis for record:", record);
-		}
-	});
-    
-	const sortedMistakes = Object.entries(mistakeCounts)
-		.sort(([,a],[,b]) => b - a)
-		.slice(0, 5); // Top 5
-            
-	if (sortedMistakes.length > 0) {
-		commonMistakesEl.innerHTML = sortedMistakes
-			.map(([word, count]) => `<div>${word} <span class="text-gray-500">(${count} times)</span></div>`)
-			.join('');
-	} else {
-		commonMistakesEl.innerHTML = '<p class="text-gray-500">No common mistakes found!</p>';
-	}
-
-	// NEW: Calculate Units Practiced
-	const practicedUnits = new Set(allRecords.map(r => r.unit_name));
-	unitsPracticedEl.textContent = practicedUnits.size;
-
-	// NEW: Show Recent Performance (last 5)
-	recentPerformanceEl.innerHTML = '';
-	const recentRecords = allRecords.slice(-5);
-	recentRecords.forEach(record => {
-		const bar = document.createElement('div');
-		bar.className = 'perf-bar';
-		bar.title = `${record.unit_name}: ${record.pronunciation_score}%`;
-        
-		const fill = document.createElement('div');
-		fill.className = 'perf-bar-fill';
-		fill.style.height = `${record.pronunciation_score}%`;
-        
-		bar.appendChild(fill);
-		recentPerformanceEl.appendChild(bar);
-	});
-}
-
-// Submit an attempt to the log
-async function submitAttempt() {
-	const studentName = document.getElementById('studentName').value || 'Unknown Student';
-	const studentClass = document.getElementById('studentClass').value || 'N/A';
-	const unitTitle = UNITS[currentPage]?.title || "Custom Practice";
-	// NEW: Get teacher feedback
-	const teacherFeedback = document.getElementById('teacherFeedback')?.value || "";
-
-	if (!currentGoal) {
-		 showMessage("Please select a sentence first.", "warning");
-		 return;
-	}
-    
-	if (!currentAnalysis) {
-		showMessage("Please analyze your speech first before submitting.", "warning");
-		return;
-	}
-    
-	const now = new Date();
-	const record = {
-		timestamp: now.toISOString(),
-		student_name: studentName,
-		student_class: studentClass,
-		unit_name: unitTitle,
-		sentence_text: currentGoal,
-		pronunciation_score: currentAnalysis.score,
-		word_analysis: JSON.stringify(currentAnalysis.analysis), // Store as JSON string
-		teacher_feedback: teacherFeedback, // NEW: Add feedback
-		session_date: now.toLocaleDateString()
-	};
-    
-	// 1. Save to localStorage
-	allRecords.push(record);
-	saveRecordsToStorage();
-	showMessage("Attempt saved to local log!", "info", 2000);
-    
-	// 2. Try to save to Google Sheet
-	if (!GOOGLE_SCRIPT_URL) {
-		console.warn("GOOGLE_SCRIPT_URL is not set. Skipping Google Sheet submission.");
-		return;
-	}
-
-	const payload = {
-		action: "submitAttempt",
-		payload: record
-	};
-
-	try {
-		showMessage("Submitting to Google Sheet...", "info");
-		const response = await fetch(GOOGLE_SCRIPT_URL, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify(payload)
-		});
-
-		if (!response.ok) {
-			throw new Error(`Server error: ${response.status}`);
-		}
-
-		const result = await response.json();
-
-		if (result.result === "success") {
-			showMessage("Successfully submitted to Google Sheet!", "info", 3000);
-		} else {
-			throw new Error(result.message);
-		}
-        
-	} catch (error) {
-		console.error("Error submitting to Google Sheet:", error);
-		showMessage(`Local log saved. Failed to submit to Google Sheet: ${error.message}`, "error");
-	}
-}
-
-
-// --- KEYBOARD SHORTCUTS ---
-document.addEventListener('keydown', (e) => {
-	// Toggle teacher view with 'T'
-	if (e.key === 't' && (e.metaKey || e.ctrlKey)) {
-		e.preventDefault();
-		toggleTeacherView();
-	}
-	// NEW: Advanced shortcuts
-	else if (e.key === 'Enter' && !e.isComposing) {
-		// Check if user is typing in an input
-		const activeEl = document.activeElement;
-		if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
-			return; // Don't block typing
-		}
-		e.preventDefault();
-		// Trigger analysis
-		if (currentPage === 'custom') {
-			analyzeCustomSpeech();
-		} else if (currentPage.startsWith('unit')) {
-			analyzeUnitSpeech();
-		}
-	}
-	else if (e.key === 'f' || e.key === 'F') {
-		 if (e.metaKey || e.ctrlKey) {
-			e.preventDefault();
-			document.getElementById('teacherFeedback')?.focus();
-		 }
-	}
-});
-
-// --- APP INITIALIZATION ---
-    
-// Unit data
-const UNITS = {
-	'unit1': { title: 'Unit 1: Welcome!', sentences: ['Hello!', 'How are you?', 'My name is...', 'What\'s your name?', 'Nice to meet you.'] },
-	'unit2': { title: 'Unit 2: Every Day', sentences: ['I wake up at seven o\'clock.', 'She brushes her teeth.', 'They eat breakfast in the kitchen.', 'He goes to work by bus.', 'We watch TV in the evening.'] },
-	'unit3': { title: 'Unit 3: Right Now', sentences: ['I am talking to you.', 'You are reading this sentence.', 'He is listening to music.', 'What are you doing?', 'It is raining outside.'] },
-	'unit4': { title: 'Unit 4: Year In, Year Out', sentences: ['My birthday is in June.', 'What time is it?', 'It\'s a quarter past three.', 'Today is Wednesday.', 'I always visit my grandmother on Sundays.'] },
-	'unit5': { title: 'Unit 5: My New House', sentences: ['There is a big sofa in the living room.', 'There are two bedrooms.', 'Is there a garden?', 'The kitchen is next to the dining room.', 'I don\'t have a garage.'] },
-	'unit6': { title: 'Unit 6: Food, Please!', sentences: ['I would like a cheeseburger and fries.', 'Can I have a cup of coffee, please?', 'Do you have any vegetarian dishes?', 'I\'m allergic to peanuts.', 'The bill, please.'] },
-	'unit7': { title: 'Unit 7: Out And About', sentences: ['Where is the nearest supermarket?', 'Go straight on, then turn left.', 'Excuse me, how do I get to the train station?', 'It\'s opposite the bank.', 'I\'m looking for the post office.'] },
-	'unit8': { title: 'Unit 8: Yesterday', sentences: ['I went to the park yesterday.', 'We played football.', 'Did you see the movie?', 'She wasn\'t at home.', 'They didn\'t come to the party.'] },
-	'unit9': { title: 'Unit 9: On Holiday', sentences: ['We are flying to Paris next week.', 'I\'m going to pack my suitcase.', 'Are you staying in a hotel?', 'She bought a lot of souvenirs.', 'I love traveling by train.'] },
-	'unit10': { title: 'Unit 10: World Around Us', sentences: ['The elephant is bigger than the lion.', 'This is the most expensive car in the world.', 'A cheetah can run very fast.', 'The Pacific Ocean is the largest ocean.', 'What is the capital of Japan?'] }
-};
-    
-});
