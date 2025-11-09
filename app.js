@@ -7,13 +7,23 @@ let allRecords = [];
 let isRecording = false;
 let speechRecognition;
 
+// Loading state management
+function showLoading() {
+    document.getElementById('loadingIndicator').classList.remove('hidden');
+    document.getElementById('messageBox').classList.add('hidden');
+}
+
+function hideLoading() {
+    document.getElementById('loadingIndicator').classList.add('hidden');
+}
+
 // --- API CONFIG ---
 const GEMINI_API_KEY = 'AIzaSyBe1ovArVarbNKzsMt0fw2H0Vmh5RHChqk'; // Replace with your actual API key
 const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
 const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 // The API_KEY is gone! This is now secure.
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyNF_yyyannNqnNnX2CyNXT6k8sq0fj1Uyo663vZhk-pTqGwZQtPJeaF4bFYWgF2EqSyA/exec"; // <-- This is your Web App URL
+// Removed Google Apps Script URL - using direct Gemini API calls now
 
 // Rate limiting: 5 requests per minute (one every 12 seconds)
 // This is now client-side throttling to avoid spamming your own script
@@ -180,83 +190,56 @@ function playAudio(blob) {
 	};
 }
     
-// Main TTS Function (Now calls our Google Script)
+// Main TTS Function (Direct Gemini API call)
 async function readQuestionAloud() {
-	if (!currentGoal) {
-		showMessage("No sentence selected to read.", "warning");
-		return;
-	}
-
-	if (!GOOGLE_SCRIPT_URL) {
-		showMessage("App is not configured. Missing Google Script URL.", "error");
-		return;
-	}
+    if (!currentGoal) {
+        showMessage("Please select or type a sentence first.", "warning");
+        return;
+    }
     
-	showMessage("Generating audio...", "info");
+    showMessage("Generating audio...", "info");
+    showLoading();
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/${TTS_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{ text: `Say in a clear, friendly, American-English voice: ${currentGoal}` }]
+                }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } }
+                    }
+                }
+            })
+        });
 
-	// Rate limit check
-	const now = Date.now();
-	const timeSinceLastCall = now - lastApiCallTime;
-	if (timeSinceLastCall < RATE_LIMIT_MS) {
-		const waitTime = RATE_LIMIT_MS - timeSinceLastCall;
-		showMessage(`Rate limit: Please wait ${Math.ceil(waitTime / 1000)}s...`, 'info', 2000);
-		await new Promise(resolve => setTimeout(resolve, waitTime));
-	}
-	lastApiCallTime = Date.now();
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
 
-	const payload = {
-		action: "getTTS",
-		text: currentGoal
-	};
+        const data = await response.json();
+        if (!data.candidates || !data.candidates[0]?.content?.parts[0]?.audio?.data) {
+            throw new Error('Invalid response format from Gemini API');
+        }
 
-	try {
-		const response = await fetch(GOOGLE_SCRIPT_URL, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify(payload)
-		});
-
-		if (!response.ok) {
-			throw new Error(`Server error: ${response.status}`);
-		}
-
-		const result = await response.json();
+        const audioContent = data.candidates[0].content.parts[0].audio.data;
+        const audioBuffer = base64ToArrayBuffer(audioContent);
+        const audioBlob = new Blob([audioBuffer], { type: 'audio/wav' });
         
-		if (result.result === "error") {
-			console.error("Server-side error (TTS):", result.message);
-			showMessage(`Failed to generate audio: ${result.message}`, "error");
-			return;
-		}
-
-		// The data is the full response from Gemini, passed through our script
-		const geminiResponse = result.data;
-		const part = geminiResponse?.candidates?.[0]?.content?.parts?.[0];
-		const audioData = part?.inlineData?.data;
-		const mimeType = part?.inlineData?.mimeType;
-
-		if (audioData && mimeType && mimeType.startsWith("audio/")) {
-			const sampleRateMatch = mimeType.match(/rate=(\d+)/);
-			if (!sampleRateMatch) {
-				 console.error("Could not find sample rate in mime type:", mimeType);
-				 showMessage("Error processing audio: Unknown sample rate.", "error");
-				 return;
-			}
-			const sampleRate = parseInt(sampleRateMatch[1], 10);
-			const pcmData = base64ToArrayBuffer(audioData);
-			const pcm16 = new Int16Array(pcmData);
-			const wavBlob = pcmToWav(pcm16, sampleRate);
-			playAudio(wavBlob);
-			hideMessage(0); // Hide "Generating..." message
-		} else {
-			console.error("Invalid TTS response structure:", result);
-			showMessage("Failed to process audio response.", "error");
-		}
-	} catch (error) {
-		console.error("Error calling Google Script for TTS:", error);
-		showMessage("Failed to connect to audio service.", "error");
-	}
+        playAudio(audioBlob);
+        showMessage("Playing audio...", "success", 2000);
+    } catch (error) {
+        console.error('Error generating speech:', error);
+        showMessage('Sorry, there was an error generating the audio. Please try again.', 'error');
+    } finally {
+        hideLoading();
+    }
 }
 
 
@@ -269,7 +252,10 @@ async function analyzeSpeechWithGemini(goal, transcription) {
         return;
     }
     
+    showLoading();
+    
     try {
+        showMessage("Analyzing your pronunciation...", "info");
         const systemPrompt = `
             You are an expert English Language (ESL) pronunciation coach.
             Compare the student's transcription to the goal sentence.
@@ -334,6 +320,8 @@ async function analyzeSpeechWithGemini(goal, transcription) {
         console.error('Error calling Gemini API:', error);
         showMessage('Sorry, there was an error analyzing your speech. Please try again.', 'error');
         throw error;
+    } finally {
+        hideLoading();
     }
 
 	if (!GOOGLE_SCRIPT_URL) {
