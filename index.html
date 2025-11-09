@@ -146,6 +146,11 @@
         </div>
         <!-- Message Box -->
         <div id="messageBox" class="hidden p-4 rounded-lg"></div>
+        <!-- Loading Indicator -->
+        <div id="loadingIndicator" class="hidden flex items-center justify-center p-4">
+          <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+          <span class="ml-2 text-indigo-600">Processing...</span>
+        </div>
       </div>
       <!-- Teacher View (Hidden by default) -->
       <div id="teacherView" class="space-y-6">
@@ -239,11 +244,11 @@
             <span>Admin</span>
           </span>
           <div class="flex flex-wrap gap-2 text-sm mb-3">
-            <span class="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">Offline‑ready</span>
-            <span class="px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">AI scoring</span>
-            <span class="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">Single‑device</span>
+            <span class="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">Client-side only</span>
+            <span class="px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Gemini AI powered</span>
+            <span class="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">Local storage</span>
           </div>
-          <div class="text-xs text-gray-500">Analysis is powered by Google Cloud AI, simulating ASR input.</div>
+          <div class="text-xs text-gray-500">Analysis is powered by Google's Gemini AI API for pronunciation assessment.</div>
         </div>
       </div>
     </div>
