@@ -206,11 +206,11 @@ async function readQuestionAloud() {
 	};
 
 	try {
+		// Use application/x-www-form-urlencoded to avoid CORS preflight from browsers.
+		const formBody = new URLSearchParams({ data: JSON.stringify(payload) });
 		const response = await fetch(GOOGLE_SCRIPT_URL, {
 			method: 'POST',
-			mode: 'cors',
-			body: JSON.stringify(payload),
-			headers: { 'Content-Type': 'application/json' }
+			body: formBody.toString()
 		});
 
 		if (!response.ok) {
@@ -289,15 +289,11 @@ async function analyzeSpeechWithGemini(goal, transcription) {
 	};
 
 	try {
-		// Send JSON payload using application/json
+		// Send as application/x-www-form-urlencoded to avoid browser preflight OPTIONS.
+		const formBody = new URLSearchParams({ data: JSON.stringify(payload) });
 		const response = await fetch(GOOGLE_SCRIPT_URL, {
 			method: 'POST',
-			mode: 'cors',
-			headers: {
-				'Content-Type': 'application/json',
-				'Accept': 'application/json'
-			},
-			body: JSON.stringify(payload)
+			body: formBody.toString()
 		});
 
 		if (!response.ok) {
@@ -778,13 +774,11 @@ async function submitAttempt() {
 
 	try {
 		showMessage("Submitting to Google Sheet...", "info");
+		// Submit as form-encoded to avoid browser preflight
+		const formBody = new URLSearchParams({ data: JSON.stringify(payload) });
 		const response = await fetch(GOOGLE_SCRIPT_URL, {
 			method: 'POST',
-			mode: 'cors',
-			headers: {
-				'Content-Type': 'application/json',
-			},
-			body: JSON.stringify(payload)
+			body: formBody.toString()
 		});
 
 		if (!response.ok) {
