@@ -290,11 +290,12 @@ async function analyzeSpeechWithGemini(goal, transcription) {
 	};
 
 	try {
-		// Send as application/x-www-form-urlencoded to avoid browser preflight OPTIONS.
-		const formBody = new URLSearchParams({ data: JSON.stringify(payload) });
 		const response = await fetch(GOOGLE_SCRIPT_URL, {
 			method: 'POST',
-			body: formBody.toString()
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(payload)
 		});
 
 		if (!response.ok) {
